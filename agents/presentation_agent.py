@@ -44,9 +44,7 @@ class PresentationAgent(BaseAgent):
         # 4. Save artifact
         state["artifacts"]["presentation_outline"] = outline
         
-        # 5. Set final status
-        state["status"] = "completed"
-        state["next_step"] = "END"
+        # 5. Let supervisor know it's completed
         shared_memory.add_message(self.name, "Executive presentation outline ready. Workflow completed.")
         
         return state

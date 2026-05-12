@@ -44,8 +44,15 @@ class CodingAgent(BaseAgent):
         # 4. Save artifact
         state["artifacts"]["implementation_plan"] = plan
         
-        # 5. Set next step
-        state["next_step"] = "report"
+        # 5. Post to Blackboard
+        await shared_blackboard.post_finding(
+            workflow_id=str(state["workflow_id"]),
+            agent=self.name,
+            topic="architecture_design",
+            content=plan,
+            confidence=0.95
+        )
+        
         shared_memory.add_message(self.name, "Architecture design complete. Implementation plan stored in artifacts.")
         
         return state

@@ -79,6 +79,15 @@ class BrowserAgent(BaseAgent):
                     metadata={"final_url": page_state["url"]}
                 )
                 self.update_state(state, [finding])
+                
+                await shared_blackboard.post_finding(
+                    workflow_id=workflow_id,
+                    agent=self.name,
+                    topic="research_data",
+                    content=action.get("summary", "Gathered info from web."),
+                    confidence=0.85
+                )
+                
                 shared_memory.add_message(self.name, f"Web interaction complete: {action.get('summary')}")
                 break
                 
@@ -92,6 +101,5 @@ class BrowserAgent(BaseAgent):
         # 5. Cleanup session (optional, could leave open for next step)
         # await browser_session_manager.close()
 
-        # Set next step back to routing logic
-        state["next_step"] = "coding" # Just an example, routing could be dynamic
+        # Removed explicit next_step so it routes back to supervisor
         return state

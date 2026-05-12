@@ -1,13 +1,12 @@
-from typing import Any, AsyncGenerator, Literal, List
+from typing import Any, AsyncGenerator, Literal, List, Union
 from uuid import UUID, uuid4
 import logging
 
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 
 from agents.core.state import WorkflowState, create_initial_state
-from agents.core.memory import shared_memory
 from agents.planning_agent import PlanningAgent
+from agents.supervisor_agent import SupervisorAgent
 from agents.research_agent import ResearchAgent
 from agents.coding_agent import CodingAgent
 from agents.report_agent import ReportAgent
@@ -16,26 +15,28 @@ from agents.browser_agent import BrowserAgent
 
 logger = logging.getLogger(__name__)
 
-def router(state: WorkflowState) -> Literal["research", "coding", "report", "presentation", "__end__"]:
+def router(state: WorkflowState) -> Union[List[str], str]:
     """
-    Conditional router that determines the next agent to execute.
+    Conditional router that determines the next agent(s) to execute.
+    Supports fan-out (returning a list of nodes for parallel execution).
     """
     next_step = state.get("next_step")
     
-    if state["status"] == "failed":
+    if state.get("status") == "failed":
         logger.error(f"Workflow failed: {state.get('errors')}")
         return "__end__"
+        
+    if not next_step:
+        return "__end__"
+        
+    # If it's a list, we return it to execute branches in parallel
+    if isinstance(next_step, list):
+        return next_step
+        
+    if next_step == "__end__":
+        return "__end__"
     
-    if next_step == "research":
-        return "research"
-    elif next_step == "coding":
-        return "coding"
-    elif next_step == "report":
-        return "report"
-    elif next_step == "presentation":
-        return "presentation"
-    
-    return "__end__"
+    return next_step
 
 class OmniAgentGraph:
     def __init__(self):
@@ -46,44 +47,33 @@ class OmniAgentGraph:
 
     def _register_nodes(self):
         self.builder.add_node("planning", PlanningAgent())
+        self.builder.add_node("supervisor", SupervisorAgent())
         self.builder.add_node("research", ResearchAgent())
+        self.builder.add_node("browser", BrowserAgent())
         self.builder.add_node("coding", CodingAgent())
         self.builder.add_node("report", ReportAgent())
         self.builder.add_node("presentation", PresentationAgent())
 
     def _register_edges(self):
-        # Entry point
+        # 1. Entry point goes to planning
         self.builder.set_entry_point("planning")
         
-        # Planning always goes to Router
+        # 2. Planning delegates initial control to Supervisor
+        self.builder.add_edge("planning", "supervisor")
+        
+        # 3. Supervisor -> Router (Fan-out to parallel agents or END)
         self.builder.add_conditional_edges(
-            "planning",
+            "supervisor",
             router,
-            {
-                "research": "research",
-                "coding": "coding",
-                "report": "report",
-                "presentation": "presentation",
-                "__end__": END
-            }
+            ["research", "browser", "coding", "report", "presentation", "__end__"]
         )
         
-        # Each agent goes back to Router for the next step
-        self.builder.add_conditional_edges("research", router, {
-            "coding": "coding",
-            "__end__": END
-        })
-        self.builder.add_conditional_edges("coding", router, {
-            "report": "report",
-            "__end__": END
-        })
-        self.builder.add_conditional_edges("report", router, {
-            "presentation": "presentation",
-            "__end__": END
-        })
-        self.builder.add_conditional_edges("presentation", router, {
-            "__end__": END
-        })
+        # 4. Parallel workers fan-in back to Supervisor for evaluation
+        self.builder.add_edge("research", "supervisor")
+        self.builder.add_edge("browser", "supervisor")
+        self.builder.add_edge("coding", "supervisor")
+        self.builder.add_edge("report", "supervisor")
+        self.builder.add_edge("presentation", "supervisor")
 
     async def run(
         self,
@@ -107,13 +97,6 @@ class OmniAgentGraph:
         
         if stream:
             return self.graph.astream(initial_state)
-        
-        final_state = await self.graph.ainvoke(initial_state)
-        return final_state
-
-# Main instance
-omniagent_graph = OmniAgentGraph()
-tial_state)
         
         final_state = await self.graph.ainvoke(initial_state)
         return final_state

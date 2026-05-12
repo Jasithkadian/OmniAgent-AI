@@ -43,8 +43,6 @@ class ReportAgent(BaseAgent):
         # 4. Save artifact
         state["artifacts"]["technical_report"] = report_md
         
-        # 5. Set next step
-        state["next_step"] = "presentation"
         shared_memory.add_message(self.name, "Technical report synthesized and available in artifacts.")
         
         return state

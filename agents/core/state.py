@@ -3,7 +3,7 @@ import operator
 from uuid import UUID
 from pydantic import BaseModel, Field
 
-AgentName = Literal["planning", "research", "coding", "report", "presentation"]
+AgentName = Literal["planning", "supervisor", "research", "coding", "report", "presentation", "browser"]
 WorkflowStatus = Literal["queued", "running", "completed", "failed"]
 
 class AgentFinding(BaseModel):
@@ -21,6 +21,7 @@ class AgentTask(BaseModel):
     objective: str
     depends_on: list[str] = Field(default_factory=list)
     status: WorkflowStatus = "queued"
+    consensus_score: float = 0.0
 
 class AgentMessage(BaseModel):
     agent: AgentName
@@ -36,10 +37,14 @@ class WorkflowState(TypedDict):
     status: WorkflowStatus
     
     # State Reducers (Annotated with operator.add allows merging instead of overwriting)
+    # This is critical for parallel LangGraph execution where multiple nodes return state
     tasks: Annotated[list[dict[str, Any]], operator.add]
     findings: Annotated[list[dict[str, Any]], operator.add]
     messages: Annotated[list[dict[str, Any]], operator.add]
     errors: Annotated[list[str], operator.add]
+    
+    # Parallel Routing State
+    parallel_branches: list[AgentName]
     
     # Conventional State
     active_agent: AgentName | None
@@ -47,7 +52,7 @@ class WorkflowState(TypedDict):
     document_ids: list[UUID]
     
     # Routing and Control
-    next_step: str | None
+    next_step: str | list[str] | None
     iteration_count: int
 
 def create_initial_state(
@@ -67,6 +72,7 @@ def create_initial_state(
         "findings": [],
         "messages": [],
         "errors": [],
+        "parallel_branches": [],
         "active_agent": None,
         "artifacts": {},
         "document_ids": document_ids or [],
