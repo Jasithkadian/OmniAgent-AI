@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 from uuid import UUID
 
 # Assume we reuse the RAG vector store for semantic memory
-# In a highly specialized system, this might be a separate Chroma collection (e.g., "omniagent_semantic_memory")
+# In a highly specialized system, this might be a separate Chroma collection (e.g., "veyra_semantic_memory")
 from rag.store.chroma import ChromaVectorStore
 from rag.chunking.semantic_chunker import DocumentChunk
 

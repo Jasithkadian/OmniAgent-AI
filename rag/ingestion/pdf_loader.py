@@ -1,8 +1,9 @@
 import asyncio
 from typing import List, Dict, Any
-from io import BytesIO
+import fitz  # PyMuPDF
 from pydantic import BaseModel
 import logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -12,36 +13,43 @@ class DocumentExtract(BaseModel):
 
 class PDFLoader:
     """
-    Async PDF loader. In a real production system, this might use PyMuPDF (fitz) 
-    or run a heavy parsing task (like unstructured) in a separate thread pool.
+    Production-grade PDF loader using PyMuPDF.
+    Extracts text page-by-page and preserves metadata.
     """
     def __init__(self):
         pass
 
     async def load_async(self, file_path: str, user_id: str, document_id: str) -> DocumentExtract:
-        logger.info(f"Loading PDF asynchronously: {file_path}")
+        logger.info(f"Loading PDF with PyMuPDF: {file_path}")
         
-        # Simulate async file IO and heavy CPU parsing
-        await asyncio.sleep(0.1)
-        
+        # Run sync PDF parsing in a thread pool to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._load_sync, file_path, user_id, document_id)
+
+    def _load_sync(self, file_path: str, user_id: str, document_id: str) -> DocumentExtract:
         try:
-            # Mocking PyMuPDF extraction
-            # import fitz
-            # doc = fitz.open(file_path)
-            # text = "".join(page.get_text() for page in doc)
+            doc = fitz.open(file_path)
+            full_text = []
             
-            # Using mock text for demonstration
-            mock_text = f"Extracted text from PDF {file_path}. This is a highly technical document about AI infrastructure."
-            
+            for page_num, page in enumerate(doc):
+                text = page.get_text()
+                # We can store text per page or joined. 
+                # For basic RAG, we'll join but keep track of page count.
+                full_text.append(text)
+                
             metadata = {
                 "source": file_path,
                 "document_id": str(document_id),
                 "user_id": str(user_id),
                 "file_type": "pdf",
-                "page_count": 1 # Mocked
+                "page_count": len(doc),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "ingestion_version": "1.0"
             }
             
-            return DocumentExtract(text=mock_text, metadata=metadata)
+            doc.close()
+            return DocumentExtract(text="\n\n".join(full_text), metadata=metadata)
+            
         except Exception as e:
             logger.error(f"Failed to parse PDF {file_path}: {e}")
-            raise
+            raise RuntimeError(f"Corrupted or invalid PDF file: {file_path}") from e

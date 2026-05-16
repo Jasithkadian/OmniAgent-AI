@@ -1,29 +1,36 @@
 import hashlib
+import logging
 from pathlib import Path
 from uuid import UUID, uuid4
+from typing import Optional
 
 from fastapi import UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.errors import AppError
-from app.db.models import Document, DocumentChunk, DocumentStatus
+from app.core.exceptions import AppError
+from app.db.models import Document, DocumentStatus
 from app.schemas.documents import DocumentIngestResponse, DocumentSearchRequest, DocumentSearchResponse
-from rag.ingestion.pipeline import IngestionPipeline
+from app.worker import celery_app
 from rag.retrieval.hybrid_search import HybridSearchService
 from rag.store.chroma import ChromaVectorStore
 
+logger = logging.getLogger(__name__)
 
 class DocumentService:
-    def __init__(self, session: AsyncSession | None = None):
+    def __init__(self, session: Optional[AsyncSession] = None):
         self.session = session
 
     async def ingest_upload(
         self,
         file: UploadFile,
         user_id: UUID,
-        conversation_id: UUID | None,
+        conversation_id: Optional[UUID],
     ) -> DocumentIngestResponse:
+        """
+        Handles document upload, persistence, and enqueues background processing.
+        Returns a 202 Accepted status to the client.
+        """
         if self.session is None:
             raise AppError("Database session is required for ingestion.")
 
@@ -33,12 +40,13 @@ class DocumentService:
             raise AppError(f"File exceeds {settings.max_upload_mb} MB limit.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
         suffix = Path(file.filename or "").suffix.lower()
-        if suffix not in {".pdf", ".docx"}:
-            raise AppError("Only PDF and DOCX files are supported.")
+        if suffix not in {".pdf", ".docx", ".txt"}:
+            raise AppError("Only PDF, DOCX and TXT files are supported.")
 
         checksum = hashlib.sha256(payload).hexdigest()
         storage_path = self._persist_upload(payload, suffix)
 
+        # Create document record in 'processing' status
         document = Document(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -50,46 +58,28 @@ class DocumentService:
             status=DocumentStatus.processing,
         )
         self.session.add(document)
-        await self.session.flush()
+        await self.session.commit()
+        await self.session.refresh(document)
 
+        # Dispatch background task for heavy RAG processing
         try:
-            pipeline = IngestionPipeline()
-            result = await pipeline.ingest_file(storage_path)
-            vector_store = ChromaVectorStore()
-            embedding_ids = await vector_store.add_chunks(
-                user_id=user_id,
-                document_id=document.id,
-                chunks=result.chunks,
+            celery_app.send_task(
+                "ingest_document_task",
+                args=[str(storage_path), str(user_id), str(document.id)]
             )
-
-            for index, chunk in enumerate(result.chunks):
-                self.session.add(
-                    DocumentChunk(
-                        document_id=document.id,
-                        chunk_index=index,
-                        content=chunk.content,
-                        token_count=chunk.token_count,
-                        embedding_id=embedding_ids[index],
-                        chunk_metadata=chunk.metadata,
-                    )
-                )
-
-            document.status = DocumentStatus.indexed
-            document.chunk_count = len(result.chunks)
-            document.token_count = result.token_count
-            document.document_metadata = result.metadata
-            await self.session.commit()
-        except Exception as exc:
+            logger.info(f"Dispatched ingestion task for document {document.id}")
+        except Exception as e:
+            logger.error(f"Failed to dispatch Celery task: {e}")
+            # Fallback: mark as failed if we can't even enqueue
             document.status = DocumentStatus.failed
-            document.error_message = str(exc)
+            document.error_message = f"Background task dispatch failed: {str(e)}"
             await self.session.commit()
-            raise
 
         return DocumentIngestResponse(
             document_id=document.id,
             status=document.status.value,
-            chunk_count=document.chunk_count,
-            token_count=document.token_count,
+            chunk_count=0,
+            token_count=0,
         )
 
     async def search(self, user_id: UUID, request: DocumentSearchRequest) -> DocumentSearchResponse:
@@ -108,4 +98,3 @@ class DocumentService:
         path = upload_dir / f"{uuid4()}{suffix}"
         path.write_bytes(payload)
         return path
-

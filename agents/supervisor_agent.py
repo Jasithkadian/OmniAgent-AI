@@ -1,16 +1,20 @@
-from typing import List
+import logging
 from agents.core.agent_base import BaseAgent
-from agents.core.state import WorkflowState, AgentFinding
+from agents.core.state import WorkflowState
 from agents.core.memory import shared_memory
 from agents.core.blackboard import shared_blackboard
 from agents.task_delegation import task_delegator
 
-SUPERVISOR_PROMPT = """
-You are the Supervisor Agent. You orchestrate the parallel execution of the agent swarm.
-Objective: {objective}
-Current Blackboard Consensus: {blackboard}
+logger = logging.getLogger(__name__)
 
-Evaluate the progress and decide the next steps.
+SUPERVISOR_PROMPT = """
+You are the Supervisor Agent. You orchestrate the workflow by evaluating task progress and deciding the next agent to execute.
+
+Objective: {objective}
+Tasks: {tasks}
+Findings: {findings}
+
+Assess if the current progress is sufficient to move to the next task or if the workflow is complete.
 """
 
 class SupervisorAgent(BaseAgent):
@@ -20,40 +24,37 @@ class SupervisorAgent(BaseAgent):
         objective = state["objective"]
         workflow_id = str(state["workflow_id"])
         
-        # 1. Resolve conflicts on the blackboard from previous parallel runs
+        logger.info(f"Supervisor evaluating workflow: {workflow_id}")
+
+        # 1. Resolve blackboard consensus (collaboration layer)
         await shared_blackboard.resolve_conflicts(workflow_id, "research_data")
         blackboard_state = await shared_blackboard.get_blackboard_state(workflow_id)
         
-        # 2. Update state tasks based on blackboard consensus
-        # (Mock logic: mark tasks as completed if we have consensus)
-        if blackboard_state.get("resolved_consensus"):
-            for task in state["tasks"]:
-                if task["status"] == "running":
-                    task["status"] = "completed"
+        # 2. Heuristic check: Find the next 'queued' task
+        next_task = next((t for t in state["tasks"] if t["status"] == "queued"), None)
         
-        # 3. Use Delegation Engine to find next parallel branches
-        next_branches = await task_delegator.evaluate_parallelism(objective, state["tasks"])
-        
-        # 4. 'Think' phase: Supervisor assesses the situation
-        analysis = await self.think(
-            SUPERVISOR_PROMPT.format(objective=objective, blackboard=str(blackboard_state["resolved_consensus"])),
-            state
-        )
-        
-        if next_branches:
-            # Mark these tasks as running
-            for task in state["tasks"]:
-                if task["agent"] in next_branches and task["status"] == "queued":
-                    task["status"] = "running"
-                    
-            state["next_step"] = next_branches
-            state["parallel_branches"] = next_branches
-            shared_memory.add_message(self.name, f"Delegating parallel tasks to: {', '.join(next_branches)}")
-            
+        if next_task:
+            logger.info(f"Supervisor delegating next task to: {next_task['agent']}")
+            state["next_step"] = next_task["agent"]
+            shared_memory.add_message(self.name, f"Delegating next task to {next_task['agent']}: {next_task['title']}")
         else:
-            # All tasks done, route to end
+            # 3. LLM check: Assess if we are actually done or need more work
+            # This handles edge cases where planning was incomplete
+            analysis = await self.think(
+                SUPERVISOR_PROMPT.format(
+                    objective=objective, 
+                    tasks=json.dumps(state["tasks"]), 
+                    findings=json.dumps(state["findings"][:3]) # Limit context
+                ),
+                state
+            )
+            
+            logger.info("All tasks completed. Finalizing workflow.")
             state["next_step"] = "__end__"
             state["status"] = "completed"
-            shared_memory.add_message(self.name, "All delegated tasks completed successfully.")
+            shared_memory.add_message(self.name, "All planned tasks completed successfully. Workflow finalized.")
             
         return state
+
+# Note: We need to import json inside the file or use json.dumps elsewhere.
+import json

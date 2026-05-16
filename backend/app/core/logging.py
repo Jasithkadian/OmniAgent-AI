@@ -1,7 +1,6 @@
 import logging
 import sys
 from loguru import logger
-from app.core.config import settings
 
 class InterceptHandler(logging.Handler):
     """
@@ -38,6 +37,7 @@ def setup_logging():
             }
         ]
     )
-    
-    # Optional: Log to file in JSON format for production ingestion
-    # logger.add("logs/app.log", format="{time} {level} {message}", level="INFO", rotation="10 MB", serialize=True)
+
+def get_logger(name: str):
+    """Utility function to get a logger by name."""
+    return logging.getLogger(name)

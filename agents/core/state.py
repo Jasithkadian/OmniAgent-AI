@@ -1,4 +1,4 @@
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict, Optional, Union
 import operator
 from uuid import UUID
 from pydantic import BaseModel, Field
@@ -32,7 +32,7 @@ class WorkflowState(TypedDict):
     # Workflow Metadata
     workflow_id: UUID
     user_id: UUID
-    conversation_id: UUID | None
+    conversation_id: Optional[UUID]
     objective: str
     status: WorkflowStatus
     
@@ -47,20 +47,20 @@ class WorkflowState(TypedDict):
     parallel_branches: list[AgentName]
     
     # Conventional State
-    active_agent: AgentName | None
+    active_agent: Optional[AgentName]
     artifacts: dict[str, Any]
     document_ids: list[UUID]
     
     # Routing and Control
-    next_step: str | list[str] | None
+    next_step: Optional[Union[str, list[str]]]
     iteration_count: int
 
 def create_initial_state(
     workflow_id: UUID,
     user_id: UUID,
     objective: str,
-    conversation_id: UUID | None = None,
-    document_ids: list[UUID] | None = None,
+    conversation_id: Optional[UUID] = None,
+    document_ids: Optional[list[UUID]] = None,
 ) -> WorkflowState:
     return {
         "workflow_id": workflow_id,

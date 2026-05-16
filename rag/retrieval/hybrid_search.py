@@ -4,54 +4,80 @@ from uuid import UUID
 import logging
 
 from rag.store.chroma import ChromaVectorStore
+from rag.store.bm25 import bm25_store
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+class RetrievalConfig:
+    def __init__(self):
+        self.top_k = getattr(settings, "retrieval_top_k", 5)
+        self.similarity_threshold = getattr(settings, "similarity_threshold", 0.3)
+        self.max_context_chunks = getattr(settings, "max_context_chunks", 10)
+
 class HybridSearchService:
-    """
-    Performs hybrid retrieval (Dense Vector + Lexical/BM25) and applies re-ranking.
-    """
     def __init__(self, vector_store: ChromaVectorStore):
         self.vector_store = vector_store
+        self.config = RetrievalConfig()
+        self._reranker = None
+
+    @property
+    def reranker(self):
+        if self._reranker is None:
+            from sentence_transformers import CrossEncoder
+            self._reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512)
+        return self._reranker
+
+    def _rrf(self, results_list: List[List[Dict]], k: int = 60) -> List[Dict]:
+        fused_scores = {}
+        content_map = {}
+        for results in results_list:
+            for rank, doc in enumerate(results):
+                doc_id = doc["id"]
+                fused_scores[doc_id] = fused_scores.get(doc_id, 0.0) + 1.0 / (rank + k)
+                content_map[doc_id] = doc
+        reranked_ids = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+        return [content_map[did] for did, _ in reranked_ids]
 
     async def search(
-        self, 
-        user_id: UUID, 
-        query: str, 
-        limit: int = 5, 
+        self,
+        user_id: UUID,
+        query: str,
+        limit: Optional[int] = None,
         document_ids: Optional[List[UUID]] = None
     ) -> List[Dict[str, Any]]:
-        logger.info(f"Executing hybrid search for user {user_id}")
-        
-        # 1. Construct metadata filters for secure tenant isolation
+        logger.info(f"Executing hybrid retrieval for user {user_id}")
+
         filters = {"user_id": str(user_id)}
         if document_ids:
-            filters["document_id"] = [str(doc_id) for doc_id in document_ids]
+            if len(document_ids) == 1:
+                filters["document_id"] = str(document_ids[0])
+            else:
+                filters["document_id"] = {"$in": [str(doc_id) for doc_id in document_ids]}
 
-        # 2. Stage 1: Dense Vector Search (High Recall)
-        # We fetch more than requested to allow reranking to pick the best
-        initial_k = limit * 3
-        vector_results = await self.vector_store.search(query=query, limit=initial_k, filters=filters)
-        
-        # 3. Stage 2: Lexical Search (e.g., BM25 via Elasticsearch/OpenSearch)
-        # Simulated Lexical retrieval
-        await asyncio.sleep(0.02)
-        lexical_results = [] # Mocked empty for now
-        
-        # 4. Merge results (Reciprocal Rank Fusion - RRF)
-        # Simplified merge for demonstration
-        merged_candidates = {str(res["metadata"]["document_id"]) + res["text"][:10]: res for res in vector_results + lexical_results}.values()
-        candidates_list = list(merged_candidates)
+        search_limit = limit or self.config.top_k
+        fetch_k = search_limit * 4
 
-        # 5. Stage 3: Cross-Encoder Reranking (High Precision)
-        # In production: Use Cohere Rerank API or local HuggingFace CrossEncoder
-        logger.debug("Applying reranking to candidates")
-        await asyncio.sleep(0.1) # Simulate heavy reranking computation
-        
-        # Sort by simulated score descending
-        candidates_list.sort(key=lambda x: x.get("score", 0), reverse=True)
-        
-        final_results = candidates_list[:limit]
-        logger.info(f"Hybrid search returned {len(final_results)} reranked results.")
-        
-        return final_results
+        # 1. Parallel dense + sparse retrieval
+        loop = asyncio.get_event_loop()
+        dense_task = self.vector_store.search(query=query, limit=fetch_k, filters=filters)
+        sparse_task = loop.run_in_executor(None, bm25_store.search, query, fetch_k)
+
+        dense_results, sparse_results = await asyncio.gather(dense_task, sparse_task)
+
+        # 2. Reciprocal Rank Fusion
+        fused = self._rrf([dense_results, sparse_results])[:20]
+
+        if not fused:
+            return []
+
+        # 3. Reranking
+        pairs = [[query, doc.get("content", "")] for doc in fused]
+        rerank_scores = await loop.run_in_executor(None, self.reranker.predict, pairs)
+
+        for i, doc in enumerate(fused):
+            doc["rerank_score"] = float(rerank_scores[i])
+
+        results = sorted(fused, key=lambda x: x["rerank_score"], reverse=True)[:search_limit]
+        logger.info(f"Hybrid retrieval returned {len(results)} results.")
+        return results

@@ -1,7 +1,9 @@
-import re
+import hashlib
+import json
 from typing import List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import logging
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -9,61 +11,52 @@ class DocumentChunk(BaseModel):
     text: str
     metadata: Dict[str, Any]
     chunk_index: int
+    chunk_hash: str = Field(description="Deterministic hash of content and metadata")
 
 class SemanticChunker:
     """
-    Splits text into smaller, overlapping chunks while attempting to respect semantic boundaries (sentences/paragraphs).
+    Production-grade chunker using RecursiveCharacterTextSplitter.
+    Implements deterministic hashing and standardized metadata.
     """
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 150):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", " ", ""]
+        )
 
     def split_text(self, text: str, base_metadata: Dict[str, Any]) -> List[DocumentChunk]:
-        logger.debug(f"Chunking document {base_metadata.get('document_id')} with size {self.chunk_size} and overlap {self.chunk_overlap}")
+        logger.info(f"Chunking document {base_metadata.get('document_id')} into size {self.chunk_size}")
         
-        # Simple fallback tokenization (character/word based for demonstration)
-        # In production, use tiktoken to count actual LLM tokens.
-        
-        # Split by paragraphs first to try and maintain semantic boundaries
-        paragraphs = re.split(r'\n\s*\n', text)
+        # 1. Split text into raw chunks
+        raw_chunks = self.splitter.split_text(text)
         
         chunks = []
-        current_chunk_text = ""
-        current_length = 0
-        chunk_index = 0
-        
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-                
-            para_length = len(para) # Approximate token count by char length for demo
+        for i, chunk_text in enumerate(raw_chunks):
+            # 2. Prepare standardized metadata
+            chunk_metadata = base_metadata.copy()
+            chunk_metadata.update({
+                "chunk_index": i,
+                "chunk_size": len(chunk_text),
+            })
             
-            # If a single paragraph is too large, it needs a hard split (omitted for brevity)
-            if current_length + para_length > self.chunk_size and current_chunk_text:
-                # Save the current chunk
-                chunks.append(DocumentChunk(
-                    text=current_chunk_text.strip(),
-                    metadata=base_metadata.copy(),
-                    chunk_index=chunk_index
-                ))
-                chunk_index += 1
-                
-                # Start new chunk, carrying over overlap from the end of the last chunk
-                # In a real implementation, overlap logic needs to precisely back-track tokens
-                overlap_text = current_chunk_text[-self.chunk_overlap:] if len(current_chunk_text) > self.chunk_overlap else current_chunk_text
-                current_chunk_text = overlap_text + " " + para
-                current_length = len(current_chunk_text)
-            else:
-                current_chunk_text += " " + para
-                current_length = len(current_chunk_text)
-                
-        # Add the last chunk
-        if current_chunk_text:
+            # 3. Generate deterministic hash (SHA256)
+            # We hash the text and a subset of stable metadata to prevent duplicates
+            hash_payload = {
+                "text": chunk_text,
+                "document_id": str(base_metadata.get("document_id")),
+                "chunk_index": i
+            }
+            chunk_hash = hashlib.sha256(json.dumps(hash_payload, sort_keys=True).encode()).hexdigest()
+            
             chunks.append(DocumentChunk(
-                text=current_chunk_text.strip(),
-                metadata=base_metadata.copy(),
-                chunk_index=chunk_index
+                text=chunk_text,
+                metadata=chunk_metadata,
+                chunk_index=i,
+                chunk_hash=chunk_hash
             ))
             
+        logger.info(f"Created {len(chunks)} chunks for document {base_metadata.get('document_id')}")
         return chunks

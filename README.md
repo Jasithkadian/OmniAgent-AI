@@ -1,6 +1,6 @@
-# OmniAgent AI
+# Veyra
 
-OmniAgent AI is a full-stack advanced multi-agent orchestration platform. It enables you to orchestrate autonomous workflows, backed by a robust RAG (Retrieval-Augmented Generation) pipeline for document analysis and an Apple-inspired premium frontend UI.
+Veyra is a full-stack advanced multi-agent orchestration platform. It enables you to orchestrate autonomous workflows, backed by a robust RAG (Retrieval-Augmented Generation) pipeline for document analysis and an Apple-inspired premium frontend UI.
 
 ## Features
 
@@ -64,4 +64,23 @@ npm install
 npm run dev
 ```
 
-Visit http://localhost:3000 to access the OmniAgent AI Dashboard.
+Visit http://localhost:3000 to access the Veyra Dashboard.
+
+## Reliability & Evaluation
+
+Veyra includes a built-in evaluation framework to ensure high-quality, hallucination-free outputs.
+
+### Running Benchmarks
+To evaluate retrieval quality and latency:
+```bash
+PYTHONPATH=backend:. python3 backend/scripts/benchmark_retrieval.py
+```
+
+### Health & Metrics
+Check the platform health and aggregated metrics:
+- API Health: `http://localhost:8000/api/v1/health`
+- Infrastructure: `http://localhost:8000/api/v1/health/db` (also `/redis`, `/vectorstore`)
+- Performance Metrics: `http://localhost:8000/api/v1/health/metrics`
+
+### Verification Agent
+Every report generated is automatically audited by the `CriticAgent`. You can inspect the `verification_metrics` in the final workflow state to see the hallucination and reasoning scores.

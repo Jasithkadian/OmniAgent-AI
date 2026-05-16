@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID
 from agents.core.state import AgentFinding, AgentMessage, AgentName, WorkflowState
 
@@ -12,7 +12,7 @@ class SharedMemory:
         self.knowledge_base: list[AgentFinding] = []
         self.artifacts: dict[str, Any] = {}
 
-    def add_message(self, agent: AgentName, content: str, metadata: dict[str, Any] | None = None):
+    def add_message(self, agent: AgentName, content: str, metadata: Optional[dict[str, Any]] = None):
         msg = AgentMessage(agent=agent, content=content, metadata=metadata or {})
         self.context_window.append(msg)
 

@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 FROM python:3.11-slim
 
@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed dependencies
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
+COPY --from=builder /usr/local/lib /usr/local/lib
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Add a non-root user
 RUN addgroup --system appgroup && adduser --system --group appuser
@@ -37,7 +37,7 @@ COPY rag/ /app/rag/
 ENV PYTHONPATH=/app/backend:/app
 
 # Create directories for persistent storage (Chroma, Uploads) and set permissions
-RUN mkdir -p /app/var/uploads /app/var/chroma && chown -R appuser:appgroup /app/var
+RUN mkdir -p /app/backend/var/uploads /app/backend/var/chroma && chown -R appuser:appgroup /app/backend/var
 
 USER appuser
 

@@ -1,6 +1,6 @@
-# OmniAgentAI Deployment Guide
+# Veyra Deployment Guide
 
-This guide covers deploying the full OmniAgentAI stack (FastAPI, LangGraph, PostgreSQL, Redis, Next.js, Nginx) to various production environments.
+This guide covers deploying the full Veyra stack (FastAPI, LangGraph, PostgreSQL, Redis, Next.js, Nginx) to various production environments.
 
 ## 1. Local Production (Docker Compose)
 The easiest way to run the entire stack locally or on a single VPS.

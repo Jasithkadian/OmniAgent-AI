@@ -1,4 +1,4 @@
-name: OmniAgentAI Production Deploy
+name: Veyra Production Deploy
 
 on:
   push:

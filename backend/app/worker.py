@@ -1,15 +1,22 @@
 import os
+import asyncio
+import logging
 from celery import Celery
+from uuid import UUID
 
-# Ensure correct Python path when running in Celery worker context
+# Ensure correct Python path
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
 # Setup Celery Application
 celery_app = Celery(
-    "omniagent_worker",
-    broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-    backend=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+    "veyra_worker",
+    broker=settings.redis_url,
+    backend=settings.redis_url,
 )
 
 celery_app.conf.update(
@@ -24,23 +31,48 @@ celery_app.conf.update(
 def ingest_document_task(file_path: str, user_id: str, document_id: str):
     """
     Background worker task to process heavy RAG chunking and embedding.
-    Because our RAG pipeline is async, we use asyncio.run here inside the sync Celery task.
+    Updates the database status upon completion.
     """
-    import asyncio
     try:
         from rag.ingestion.pipeline import rag_pipeline
-        from uuid import UUID
+        from app.db.session import AsyncSessionLocal
+        from app.db.models.documents import Document, DocumentStatus
         
-        # Run the async pipeline synchronously in the worker
-        result = asyncio.run(
-            rag_pipeline.ingest_document(
+        async def _run_ingestion():
+            # 1. Execute RAG pipeline
+            result = await rag_pipeline.ingest_document(
                 file_path=file_path, 
                 user_id=UUID(user_id), 
                 document_id=UUID(document_id)
             )
-        )
-        return result
-    except ImportError:
-        return {"error": "RAG pipeline not found"}
+            
+            # 2. Update Database Status
+            async with AsyncSessionLocal() as session:
+                document = await session.get(Document, UUID(document_id))
+                if document:
+                    document.status = DocumentStatus.indexed
+                    document.chunk_count = result.get("chunks_created", 0)
+                    # In a full implementation, we would also sync chunks to SQL here
+                    await session.commit()
+            
+            return result
+
+        return asyncio.run(_run_ingestion())
+        
     except Exception as e:
+        logger.error(f"Ingestion task failed for {document_id}: {e}")
+        # Try to mark as failed in DB
+        try:
+            from app.db.session import AsyncSessionLocal
+            from app.db.models.documents import Document, DocumentStatus
+            async def _mark_failed():
+                async with AsyncSessionLocal() as session:
+                    document = await session.get(Document, UUID(document_id))
+                    if document:
+                        document.status = DocumentStatus.failed
+                        document.error_message = str(e)
+                        await session.commit()
+            asyncio.run(_mark_failed())
+        except:
+            pass
         return {"error": str(e)}

@@ -3,17 +3,28 @@ version: '3.8'
 services:
   db:
     image: postgres:15-alpine
-    container_name: omniagent-db
+    container_name: veyra-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-omniagent}
+      POSTGRES_USER: ${POSTGRES_USER:-veyra}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnipass}
-      POSTGRES_DB: ${POSTGRES_DB:-omniagent_db}
+      POSTGRES_DB: ${POSTGRES_DB:-veyra_db}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-omniagent} -d ${POSTGRES_DB:-omniagent_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-veyra} -d ${POSTGRES_DB:-veyra_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: veyra-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,13 +32,16 @@ services:
   backend:
     build:
       context: .
-      dockerfile: docker/Dockerfile.backend
-    container_name: omniagent-backend
+      dockerfile: docker/backend.Dockerfile
+    container_name: veyra-backend
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-omniagent}:${POSTGRES_PASSWORD:-omnipass}@db:5432/${POSTGRES_DB:-omniagent_db}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-veyra}:${POSTGRES_PASSWORD:-omnipass}@db:5432/${POSTGRES_DB:-veyra_db}
+      - REDIS_URL=redis://redis:6379/0
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
@@ -38,15 +52,40 @@ services:
       - ./backend:/app/backend
       - ./agents:/app/agents
       - ./rag:/app/rag
+      - ./var/uploads:/app/backend/var/uploads
       - chromadb_data:/app/chroma_db
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    container_name: veyra-worker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-veyra}:${POSTGRES_PASSWORD:-omnipass}@db:5432/${POSTGRES_DB:-veyra_db}
+      - REDIS_URL=redis://redis:6379/0
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./backend:/app/backend
+      - ./agents:/app/agents
+      - ./rag:/app/rag
+      - ./var/uploads:/app/backend/var/uploads
+      - chromadb_data:/app/chroma_db
+    # Override the default command from the Dockerfile to start Celery
+    command: ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel=info"]
 
   frontend:
     build:
       context: .
-      dockerfile: docker/Dockerfile.frontend
+      dockerfile: docker/frontend.Dockerfile
       args:
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
-    container_name: omniagent-frontend
+    container_name: veyra-frontend
     depends_on:
       - backend
     environment:

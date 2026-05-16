@@ -1,12 +1,12 @@
 from uuid import UUID
 
-from agents.core.graph import omniagent_graph
+from agents.core.graph import veyra_graph
 from app.schemas.workflows import WorkflowRunRequest, WorkflowRunResponse
 
 
 class WorkflowService:
     async def run(self, user_id: UUID, request: WorkflowRunRequest) -> WorkflowRunResponse:
-        state = await omniagent_graph.run(
+        state = await veyra_graph.run(
             user_id=user_id,
             objective=request.objective,
             conversation_id=request.conversation_id,

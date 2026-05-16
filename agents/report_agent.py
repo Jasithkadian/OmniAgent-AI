@@ -1,48 +1,62 @@
+import logging
 from agents.core.agent_base import BaseAgent
 from agents.core.state import WorkflowState, AgentFinding
 from agents.core.memory import shared_memory
-from agents.tools.report_writer import ReportWriterTool
+
+logger = logging.getLogger(__name__)
 
 REPORT_PROMPT = """
-You are the Technical Writer. Synthesize the findings from Research and Coding into a professional report.
+You are the Technical Report Agent. Your task is to synthesize all research findings into a comprehensive, structured technical report.
+
 Objective: {objective}
 Findings: {findings}
 
-Ensure the report is structured, clear, and actionable.
+Requirements:
+1. Provide a clear executive summary.
+2. Detail technical requirements and constraints.
+3. Propose a high-level solution architecture.
+4. Cite findings where appropriate.
+
+Format the report in Markdown.
 """
 
 class ReportAgent(BaseAgent):
     name = "report"
 
-    def __init__(self, model=None):
-        super().__init__(model, tools=[ReportWriterTool()])
-
     async def run(self, state: WorkflowState) -> WorkflowState:
         objective = state["objective"]
-        all_findings = [AgentFinding(**f) for f in state["findings"]]
+        all_findings = [f["content"] for f in state["findings"]]
         
-        # 1. Use Tool: Compose markdown
-        tool = ReportWriterTool()
-        report_md = tool.compose_markdown(objective, all_findings)
-        
-        # 2. 'Think' phase: Review and polish
-        analysis = await self.think(
-            REPORT_PROMPT.format(objective=objective, findings=str(state["findings"])),
+        logger.info(f"Report Agent synthesizing {len(all_findings)} findings.")
+
+        # 1. Reasoning phase: Synthesize report
+        report_content = await self.think(
+            REPORT_PROMPT.format(objective=objective, findings="\n\n".join(all_findings)),
             state
         )
         
-        # 3. Create findings
+        # 2. Record final finding/artifact
         finding = AgentFinding(
             agent=self.name,
-            title="Technical Synthesis Report",
-            content=f"Generated {len(report_md.splitlines())} lines of technical documentation.",
+            title="Final Technical Synthesis Report",
+            content=report_content,
             confidence=1.0
         )
         self.update_state(state, [finding])
         
-        # 4. Save artifact
-        state["artifacts"]["technical_report"] = report_md
+        # 3. Mark task as completed
+        current_task = next((t for t in state["tasks"] if t["agent"] == "report" and t["status"] == "queued"), None)
+        if current_task:
+            for t in state["tasks"]:
+                if t["id"] == current_task["id"]:
+                    t["status"] = "completed"
         
-        shared_memory.add_message(self.name, "Technical report synthesized and available in artifacts.")
+        # 4. Save to artifacts
+        state["artifacts"]["final_report"] = report_content
+        
+        # 5. Route to Critic for verification
+        state["next_step"] = "critic"
+        
+        shared_memory.add_message(self.name, "Final report generated and stored in artifacts.")
         
         return state
